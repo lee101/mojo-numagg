@@ -139,9 +139,17 @@ def _group_reduce(
 
     rows = np.ascontiguousarray(value_rows, dtype=np.float64)
     result = np.empty((rows.shape[0], num_labels), dtype=np.float64)
-    work = np.empty_like(result)
-    counts = np.empty(result.shape, dtype=np.int64)
-    if result.size:
+    if operation == "nansum" and rows.shape[0] == 1 and result.size:
+        lib().mna_group_nansum_one_row(
+            addr(rows),
+            addr(flat_labels),
+            addr(result),
+            rows.shape[1],
+            num_labels,
+        )
+    elif result.size:
+        work = np.empty_like(result)
+        counts = np.empty(result.shape, dtype=np.int64)
         function = lib().mna_group_reduce
         # Empty reduction axes still need the native identity initialization.
         # Non-null one-element sentinels are never dereferenced when n == 0.

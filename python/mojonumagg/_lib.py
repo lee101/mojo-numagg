@@ -24,6 +24,7 @@ _SIGNATURES = {
     "mna_move_cov": ([P, P, P] + [I] * 4, None),
     "mna_move_corr": ([P, P, P] + [I] * 4, None),
     "mna_group_reduce": ([P] * 5 + [I] * 5, None),
+    "mna_group_nansum_one_row": ([P] * 3 + [I] * 2, None),
 }
 
 

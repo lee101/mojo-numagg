@@ -63,56 +63,62 @@ def move_sum_mean(
         move_sum_mean_row(values, result, row, n, window, min_count, take_mean)
 
 
-def move_var_std_row(
+def move_var_std_row[
+    take_sqrt: Bool
+](
     values: FPtr,
     result: FPtr,
     row: Int,
     n: Int,
     window: Int,
     min_count: Int,
-    take_sqrt: Bool,
 ):
     var base = row * n
     var mean = 0.0
     var moment2 = 0.0
     var count = 0
-    for i in range(n):
+    for i in range(window):
         var value = values[base + i]
+        if not isnan(value):
+            count += 1
+            var delta = value - mean
+            mean += delta / Float64(count)
+            moment2 += delta * (value - mean)
+        if count >= min_count and count > 1:
+            var variance = moment2 / Float64(count - 1)
+            result[base + i] = sqrt(variance) if take_sqrt else variance
+
+    for i in range(window, n):
+        var value = values[base + i]
+        var old = values[base + i - window]
         var has_value = not isnan(value)
-        if i >= window:
-            var old = values[base + i - window]
-            var has_old = not isnan(old)
-            if has_value and has_old:
-                if count > 1:
-                    var old_mean = mean
-                    mean += (value - old) / Float64(count)
-                    moment2 += (value - old) * (
-                        value - mean + old - old_mean
-                    )
-                    if moment2 < 0.0:
-                        moment2 = 0.0
-                else:
-                    mean = value
+        var has_old = not isnan(old)
+        if has_value and has_old:
+            if count > 1:
+                var old_mean = mean
+                mean += (value - old) / Float64(count)
+                moment2 += (value - old) * (
+                    value - mean + old - old_mean
+                )
+                if moment2 < 0.0:
                     moment2 = 0.0
-            elif has_old:
-                if count == 1:
-                    mean = 0.0
+            else:
+                mean = value
+                moment2 = 0.0
+        elif has_old:
+            if count == 1:
+                mean = 0.0
+                moment2 = 0.0
+            else:
+                var new_count = count - 1
+                var new_mean = (Float64(count) * mean - old) / Float64(
+                    new_count
+                )
+                moment2 -= (old - mean) * (old - new_mean)
+                mean = new_mean
+                if moment2 < 0.0:
                     moment2 = 0.0
-                else:
-                    var new_count = count - 1
-                    var new_mean = (Float64(count) * mean - old) / Float64(
-                        new_count
-                    )
-                    moment2 -= (old - mean) * (old - new_mean)
-                    mean = new_mean
-                    if moment2 < 0.0:
-                        moment2 = 0.0
-                count -= 1
-            elif has_value:
-                count += 1
-                var delta = value - mean
-                mean += delta / Float64(count)
-                moment2 += delta * (value - mean)
+            count -= 1
         elif has_value:
             count += 1
             var delta = value - mean
@@ -123,17 +129,63 @@ def move_var_std_row(
             result[base + i] = sqrt(variance) if take_sqrt else variance
 
 
-def move_var_std(
+def group_nansum_serial(
+    values: FPtr,
+    labels: IPtr,
+    result: FPtr,
+    n: Int,
+    ngroups: Int,
+):
+    comptime W = simd_width_of[DType.float64]()
+    var zeros = SIMD[DType.float64, W](0.0)
+    if ngroups == 1:
+        var totals = zeros
+        var i = 0
+        while i + W <= n:
+            var value_vec = values.load[width=W, alignment=1](i)
+            var label_vec = labels.load[width=W, alignment=1](i)
+            var valid = label_vec.eq(0) & value_vec.eq(value_vec)
+            totals += valid.select(value_vec, zeros)
+            i += W
+        var total = totals.reduce_add()
+        while i < n:
+            var value = values[i]
+            if labels[i] == 0 and not isnan(value):
+                total += value
+            i += 1
+        result[0] = total
+        return
+
+    var group = 0
+    while group + W <= ngroups:
+        result.store[alignment=1](group, zeros)
+        group += W
+    while group < ngroups:
+        result[group] = 0.0
+        group += 1
+    for i in range(n):
+        var label = Int(labels[i])
+        if label < 0 or label >= ngroups:
+            continue
+        var value = values[i]
+        if not isnan(value):
+            result[label] += value
+
+
+def move_var_std[
+    take_sqrt: Bool
+](
     values: FPtr,
     result: FPtr,
     nrows: Int,
     n: Int,
     window: Int,
     min_count: Int,
-    take_sqrt: Bool,
 ):
     for row in range(nrows):
-        move_var_std_row(values, result, row, n, window, min_count, take_sqrt)
+        move_var_std_row[take_sqrt](
+            values, result, row, n, window, min_count
+        )
 
 
 def move_covariance_row(
@@ -436,7 +488,7 @@ def mna_move_var(
     window: Int,
     min_count: Int,
 ) abi("C"):
-    move_var_std(fp(values), fp(result), nrows, n, window, min_count, False)
+    move_var_std[False](fp(values), fp(result), nrows, n, window, min_count)
 
 
 @export("mna_move_std")
@@ -448,7 +500,7 @@ def mna_move_std(
     window: Int,
     min_count: Int,
 ) abi("C"):
-    move_var_std(fp(values), fp(result), nrows, n, window, min_count, True)
+    move_var_std[True](fp(values), fp(result), nrows, n, window, min_count)
 
 
 @export("mna_move_cov")
@@ -670,3 +722,14 @@ def mna_group_reduce(
             ngroups,
             ddof,
         )
+
+
+@export("mna_group_nansum_one_row")
+def mna_group_nansum_one_row(
+    values: Int,
+    labels: Int,
+    result: Int,
+    n: Int,
+    ngroups: Int,
+) abi("C"):
+    group_nansum_serial(fp(values), ip(labels), fp(result), n, ngroups)

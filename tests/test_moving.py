@@ -127,6 +127,19 @@ def test_rolling_variance_nan_replacement_paths():
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
 
+def test_rolling_variance_large_offset_stability():
+    rng = np.random.default_rng(407)
+    values = 1.0e6 + rng.normal(size=4097)
+    values[::97] = np.nan
+    actual = mojonumagg.move_var(values, window=128, min_count=64)
+    expected = np.full(values.shape, np.nan)
+    for index in range(63, values.size):
+        part = values[max(0, index - 127) : index + 1]
+        if np.count_nonzero(~np.isnan(part)) >= 64:
+            expected[index] = np.nanvar(part, ddof=1)
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-9)
+
+
 @pytest.mark.parametrize("name", ["move_var", "move_std"])
 def test_rolling_moment_replaces_only_valid_value(name):
     values = np.array([1.0, np.nan, np.nan, 2.0, 3.0])

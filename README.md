@@ -85,15 +85,17 @@ Machine: Intel(R) Xeon(R) CPU E5-2697 v4 @ 2.30GHz (x86_64), Python 3.13.14,
 
 | Kernel | Elements | numbagg (ms) | Mojo (ms) | Speedup |
 |---|---:|---:|---:|---:|
-| `move_sum` (w=128) | 2,000,000 | 21.153 | 14.305 | 1.48x |
-| `move_mean` (w=128) | 2,000,000 | 21.091 | 9.614 | 2.19x |
-| `move_var` (w=128) | 2,000,000 | 18.545 | 16.471 | 1.13x |
-| `move_corr` (w=128) | 2,000,000 | 47.622 | 39.101 | 1.22x |
-| `group_nansum` (4,096 groups) | 2,000,000 | 11.990 | 9.902 | 1.21x |
-| `group_nanmean` (4,096 groups) | 2,000,000 | 20.489 | 9.706 | 2.11x |
-| `group_nanvar` (4,096 groups) | 2,000,000 | 16.538 | 14.790 | 1.12x |
+| `move_sum` (w=128) | 2,000,000 | 14.628 | 8.283 | 1.77x |
+| `move_mean` (w=128) | 2,000,000 | 14.594 | 9.155 | 1.59x |
+| `move_var` (w=128) | 2,000,000 | 14.858 | 10.625 | 1.40x |
+| `move_corr` (w=128) | 2,000,000 | 31.872 | 25.890 | 1.23x |
+| `group_nansum` (4,096 groups) | 2,000,000 | 10.379 | 4.666 | 2.22x |
+| `group_nanmean` (4,096 groups) | 2,000,000 | 13.113 | 8.578 | 1.53x |
+| `group_nanvar` (4,096 groups) | 2,000,000 | 21.148 | 14.802 | 1.43x |
 
-Mojo is faster in all seven cases on this run. No GPU path is provided.
+Mojo is faster in all seven cases on this run. No GPU path is provided: these
+rolling and grouped scatter kernels perform well under two floating-point
+operations per byte moved, so transfer and launch overhead would dominate.
 
 ## How it works
 
@@ -110,12 +112,14 @@ ctypes boundary as integer addresses, and each Mojo export reconstructs an
 outputs, and scratch buffers, so the native library performs no allocation
 and retains no pointers after a call.
 
-Moving sums and means update a window in constant time. Variance and standard
-deviation use removable Welford moments with a direct replacement update.
+Moving sums, means, variance, and standard deviation update rolling totals in
+constant time; variance and standard deviation use compile-time-specialized
+removable Welford moments with separate warm-up and steady-state loops.
 Covariance and correlation track paired valid observations. Grouped variance
 uses centered two-pass moments; other grouped reducers make one pass over each
-row. Grouped operations are specialized at compile time, and contiguous state
-initialization uses native-width SIMD with a scalar tail.
+row. One-row grouped sums bypass unused count and work buffers. Contiguous
+state initialization and the single-group sum path use native-width SIMD with
+unaligned-safe loads and scalar tails.
 
 Independent rows totaling at least 262,144 elements are split across a bounded
 host thread pool; smaller calls stay serial to avoid launch overhead. Each

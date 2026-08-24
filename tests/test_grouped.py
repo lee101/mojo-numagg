@@ -164,6 +164,18 @@ def test_grouped_simd_initialization_tail(num_labels):
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.parametrize("length", range(1, 18))
+def test_grouped_nansum_simd_input_tail(length):
+    values = np.arange(length, dtype=np.float64) - 3.0
+    values[::5] = np.nan
+    labels = np.zeros(length, dtype=np.int64)
+    if length > 2:
+        labels[-1] = -1
+    actual = mojonumagg.group_nansum(values, labels, num_labels=1)
+    expected = numbagg.group_nansum(values, labels, num_labels=1)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
 def test_grouped_variance_large_offset_stability():
     rng = np.random.default_rng(404)
     values = 1.0e9 + rng.normal(size=4097)
